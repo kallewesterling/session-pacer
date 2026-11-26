@@ -1,0 +1,774 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>session-pacer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1014;
+    --panel: #171a21;
+    --panel-2: #1f232c;
+    --line: #2a2f3a;
+    --text: #e8eaf0;
+    --muted: #8a91a3;
+    --green: #3ecf8e;
+    --amber: #f5b83d;
+    --red: #ff5c5c;
+    --blue: #5aa9ff;
+    --scale: 1;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 18px;
+    gap: 12px;
+  }
+  .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+
+  header { display: flex; align-items: baseline; gap: 14px; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  header .clock { font-size: 18px; }
+
+  /* Top stats */
+  .stats { display: grid; grid-template-columns: 1fr 1fr 1.3fr 1fr; gap: 12px; }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 16px;
+  }
+  .stat .label { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .stat .value { font-size: 54px; font-weight: 600; line-height: 1.1; }
+  .stat .sub { font-size: 13px; color: var(--muted); min-height: 1.2em; }
+  .stat.status .value { font-size: 40px; padding-top: 8px; }
+  .stat.ok { border-color: var(--green); } .stat.ok .value { color: var(--green); }
+  .stat.warn { border-color: var(--amber); } .stat.warn .value { color: var(--amber); }
+  .stat.bad { border-color: var(--red); background: #2a1416; } .stat.bad .value { color: var(--red); }
+  .stat.ahead { border-color: var(--blue); } .stat.ahead .value { color: var(--blue); }
+  .stat.idle .value { color: var(--muted); }
+
+  /* Timeline */
+  .timeline { position: relative; height: 34px; display: flex; border-radius: 8px; overflow: hidden; background: var(--panel); border: 1px solid var(--line); }
+  .timeline .seg {
+    border-right: 1px solid var(--bg);
+    font-size: 10px; color: var(--muted);
+    padding: 3px 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    cursor: pointer; background: var(--panel-2);
+  }
+  .timeline .seg.done { background: #1a2a23; color: #5d8f77; }
+  .timeline .seg.current { background: #24405f; color: #fff; }
+  .timeline .seg.buffer { background: repeating-linear-gradient(45deg, var(--panel-2), var(--panel-2) 4px, var(--panel) 4px, var(--panel) 8px); }
+  .timeline .playhead { position: absolute; top: 0; bottom: 0; width: 3px; background: #fff; box-shadow: 0 0 6px #fff; pointer-events: none; }
+  .timeline .cp { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--amber); opacity: .8; pointer-events: none; }
+  .timeline .cp.met { background: var(--green); }
+  .timeline .cp.missed { background: var(--red); width: 3px; opacity: 1; }
+
+  /* Alerts */
+  #alerts:empty { display: none; }
+  .alert {
+    border-radius: 12px; padding: 12px 16px; font-size: 20px; font-weight: 600;
+    display: flex; gap: 14px; align-items: baseline;
+  }
+  .alert .tag { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
+  .alert.missed { background: #3a1517; border: 2px solid var(--red); animation: pulse 1.6s ease-in-out infinite; }
+  .alert.missed .tag { background: var(--red); color: #000; }
+  .alert.risk { background: #33280f; border: 1px solid var(--amber); font-size: 17px; }
+  .alert.risk .tag { background: var(--amber); color: #000; }
+  .alert.info { background: var(--panel); border: 1px solid var(--line); font-size: 15px; font-weight: 500; }
+  @keyframes pulse { 50% { border-color: #ff9a9a; box-shadow: 0 0 18px #ff5c5c55; } }
+
+  /* Main */
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 2.1fr) minmax(300px, 1fr); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .current { display: flex; flex-direction: column; min-height: 0; }
+  .current .head { display: flex; align-items: flex-start; gap: 16px; }
+  .current .head .titles { flex: 1; min-width: 0; }
+  .current h2 { margin: 0; font-size: 30px; line-height: 1.15; }
+  .current .what { color: var(--muted); font-size: 16px; margin-top: 2px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .badge { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); }
+  .badge.who { border-color: #4b5875; }
+  .badge.media-ready { border-color: var(--green); color: var(--green); }
+  .badge.media-todo { border-color: var(--red); color: var(--red); }
+  .badge.media-incoming { border-color: var(--amber); color: var(--amber); }
+  .badge.media-live, .badge.media-video-only { border-color: var(--blue); color: var(--blue); }
+  .badge.protect { border-color: var(--green); color: var(--green); }
+
+  .sectimer { text-align: right; white-space: nowrap; }
+  .sectimer .big { font-size: 64px; font-weight: 600; line-height: 1; }
+  .sectimer .small { font-size: 14px; color: var(--muted); margin-top: 4px; }
+  .sectimer.over .big { color: var(--red); }
+  .sectimer.low .big { color: var(--amber); }
+
+  .progress { height: 8px; background: var(--panel-2); border-radius: 4px; margin: 12px 0 10px; overflow: hidden; }
+  .progress > div { height: 100%; background: var(--blue); transition: width .25s linear; }
+  .progress.low > div { background: var(--amber); }
+  .progress.over > div { background: var(--red); }
+
+  .cut { border-left: 4px solid var(--amber); background: #2a2210; padding: 8px 12px; border-radius: 6px; margin-bottom: 10px; font-size: calc(17px * var(--scale)); }
+  .cut b { color: var(--amber); }
+
+  .notes { overflow-y: auto; font-size: calc(21px * var(--scale)); line-height: 1.5; padding-right: 6px; color: #d4d8e2; }
+  .notes strong { color: #ffd479; font-weight: 700; }
+  .notes h4 { margin: 1em 0 .35em; font-size: .72em; text-transform: uppercase; letter-spacing: .08em; color: #b7a6ff; }
+
+  #filler {
+    position: fixed; inset: 40px 8vw; z-index: 10; display: none; flex-direction: column;
+    background: #14121f; border: 2px solid #6b4fd8; border-radius: 14px; padding: 18px 24px;
+    box-shadow: 0 20px 80px #000c;
+  }
+  #filler.open { display: flex; }
+  #filler .bar { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  #filler .bar h2 { margin: 0; font-size: 20px; color: #d9d2ff; }
+  #filler .notes { flex: 1; min-height: 0; }
+  .autoscroll { font-size: 12px; color: var(--muted); margin-top: 6px; text-align: right; }
+  .autoscroll.on { color: var(--green); }
+  .autoscroll.held { color: var(--amber); }
+  .notes p { margin: 0 0 .55em; }
+  .notes .stage { color: var(--muted); font-style: italic; }
+  .notes .label { font-weight: 700; color: #b8c4e0; }
+  .notes .bullet { padding-left: 1.1em; text-indent: -1.1em; }
+  .notes .bullet::before { content: "•  "; color: var(--muted); }
+  .notes .prompt {
+    font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: .8em;
+    background: #10141b; border-left: 3px solid var(--blue); padding: 6px 10px; margin: 0; border-radius: 0 6px 6px 0;
+  }
+  .notes .prompt + .prompt { padding-top: 0; }
+  .notes .prompt + p:not(.prompt) { margin-top: .55em; }
+  .notes code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: .85em; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  .notes a { color: var(--blue); }
+
+  .side { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+  .side > .card { flex-shrink: 0; }
+  .side > .agenda { flex: 1 0 180px; position: relative; }
+  .side h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+  .next .title { font-size: 19px; font-weight: 600; }
+  .next .meta { color: var(--muted); font-size: 13px; }
+  .next .first { margin-top: 6px; font-size: 14px; color: #c6cbd8; }
+
+  .booth { border-color: #6b4fd8; background: #1a1730; }
+  .booth h3 { color: #b7a6ff; }
+  .booth .file { font-size: 21px; font-weight: 700; color: #fff; word-break: break-word; }
+  .booth .file.none { font-size: 16px; color: var(--muted); font-weight: 500; }
+  .booth .meta { font-size: 13px; color: var(--muted); }
+  .booth .say { margin-top: 6px; font-size: 14px; color: #d9d2ff; font-style: italic; }
+  .booth .alt { margin-top: 4px; font-size: 13px; color: var(--amber); }
+  .booth .upnext { margin-top: 10px; padding-top: 8px; border-top: 1px solid #332c5c; font-size: 14px; }
+  .booth .upnext b { color: #fff; }
+  .booth details { margin-top: 8px; font-size: 13px; }
+  .booth summary { cursor: pointer; color: var(--muted); }
+  .booth table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  .booth td { padding: 2px 4px; vertical-align: top; }
+  .booth td:first-child { color: var(--muted); white-space: nowrap; width: 1%; }
+  .booth tr.cur td { color: #fff; font-weight: 600; background: #2c2552; }
+  .cps { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+  .cps li { display: grid; grid-template-columns: 22px 54px 1fr auto; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+  .cps li:last-child { border-bottom: 0; }
+  .cps .icon { text-align: center; }
+  .cps .met .icon { color: var(--green); }
+  .cps .late .icon { color: var(--amber); }
+  .cps .missed { color: var(--red); font-weight: 600; }
+  .cps .soon .icon, .cps .risk .icon { color: var(--amber); }
+  .cps .note { color: var(--muted); font-size: 12px; }
+
+  .agenda { flex: 1; min-height: 0; overflow-y: auto; }
+  .agenda h3 { position: sticky; top: -14px; margin: -14px 0 4px; padding: 14px 0 6px; background: var(--panel); z-index: 1; }
+  .agenda ol { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .agenda li { display: grid; grid-template-columns: 44px 1fr 44px 54px; gap: 6px; padding: 4px 6px; border-radius: 6px; cursor: pointer; align-items: baseline; }
+  .agenda li:hover { background: var(--panel-2); }
+  .agenda li { scroll-margin-top: 34px; }
+  .agenda li.done { color: var(--muted); }
+  .agenda li.current { background: #24405f; color: #fff; }
+  .agenda .delta.late { color: var(--amber); }
+  .agenda .delta.early { color: var(--blue); }
+  .agenda .delta.ontime { color: var(--green); }
+
+  footer { display: flex; gap: 16px; font-size: 12px; color: var(--muted); align-items: center; flex-wrap: wrap; }
+  footer kbd { font-family: inherit; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--text); }
+  footer .protect { color: var(--green); margin-left: auto; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: #1d3b2e; border-color: var(--green); }
+  .controls { display: flex; gap: 6px; }
+  [hidden] { display: none !important; }
+  #fatal {
+    position: fixed; inset: 0; z-index: 20; background: var(--bg); color: var(--red);
+    padding: 48px; font: 16px/1.6 "SF Mono", ui-monospace, Menlo, monospace; white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="title"></h1>
+  <span class="muted" id="event"></span>
+  <span class="spacer"></span>
+  <div class="controls">
+    <button id="btn-prev" title="Previous section (←)">◀ Prev</button>
+    <button id="btn-start" class="primary" title="Start / pause (Space)">Start</button>
+    <button id="btn-next" title="Next section (→)">Next ▶</button>
+    <button id="btn-reset" title="Reset (R)">Reset</button>
+  </div>
+  <span class="clock mono" id="clock"></span>
+</header>
+
+<section class="stats">
+  <div class="stat" id="stat-elapsed">
+    <div class="label">Session elapsed</div>
+    <div class="value mono" id="elapsed">0:00</div>
+    <div class="sub" id="elapsed-sub"></div>
+  </div>
+  <div class="stat" id="stat-remaining">
+    <div class="label">Session remaining</div>
+    <div class="value mono" id="remaining">0:00</div>
+    <div class="sub" id="remaining-sub"></div>
+  </div>
+  <div class="stat status idle" id="stat-status">
+    <div class="label">Pace vs plan</div>
+    <div class="value" id="status">Not started</div>
+    <div class="sub" id="status-sub">Press Space to start the clock</div>
+  </div>
+  <div class="stat" id="stat-finish">
+    <div class="label">Projected finish</div>
+    <div class="value mono" id="finish">0:00</div>
+    <div class="sub" id="finish-sub"></div>
+  </div>
+</section>
+
+<div class="timeline" id="timeline"></div>
+
+<section id="alerts"></section>
+
+<main>
+  <section class="card current">
+    <div class="head">
+      <div class="titles">
+        <div class="muted" id="cur-index" style="font-size:12px;text-transform:uppercase;letter-spacing:.08em"></div>
+        <h2 id="cur-step"></h2>
+        <div class="what" id="cur-what"></div>
+        <div class="badges" id="cur-badges"></div>
+      </div>
+      <div class="sectimer" id="sectimer">
+        <div class="big mono" id="sec-remaining">0:00</div>
+        <div class="small mono" id="sec-elapsed"></div>
+      </div>
+    </div>
+    <div class="progress" id="progress"><div id="progress-bar" style="width:0%"></div></div>
+    <div id="cut"></div>
+    <div class="notes" id="notes"></div>
+    <div class="autoscroll" id="autoscroll"></div>
+  </section>
+
+  <aside class="side">
+    <section class="card booth" id="booth"></section>
+    <section class="card next">
+      <h3>Up next</h3>
+      <div id="next"></div>
+    </section>
+    <section class="card" id="cps-card">
+      <h3>Checkpoints</h3>
+      <ul class="cps" id="cps"></ul>
+    </section>
+    <section class="card agenda">
+      <h3>Run of show <span style="text-transform:none;letter-spacing:0">(click to jump)</span></h3>
+      <ol id="agenda"></ol>
+    </section>
+  </aside>
+</main>
+
+<div id="filler">
+  <div class="bar"><h2>Filler questions</h2><span class="muted">Q or Esc to close · the clock keeps running</span></div>
+  <div class="notes" id="filler-notes"></div>
+</div>
+
+<footer>
+  <span><kbd>Space</kbd> start/pause</span>
+  <span><kbd>→</kbd> <kbd>N</kbd> next</span>
+  <span><kbd>←</kbd> <kbd>P</kbd> prev</span>
+  <span><kbd>[</kbd> <kbd>]</kbd> nudge clock ±15s</span>
+  <span><kbd>-</kbd> <kbd>=</kbd> notes size</span>
+  <span id="hint-filler"><kbd>Q</kbd> filler questions</span>
+  <span><kbd>S</kbd> auto-scroll</span>
+  <span><kbd>F</kbd> fullscreen</span>
+  <span><kbd>R</kbd> reset</span>
+  <span class="protect" id="protect"></span>
+</footer>
+
+<div id="fatal" hidden></div>
+
+<script>
+// Loads sessions/<name>.js, where <name> comes from ?session=, then the last
+// session used in this browser, then "example".
+(() => {
+  const LAST = "session-pacer:last-session";
+  const asked = new URLSearchParams(location.search).get("session");
+  const name = asked || localStorage.getItem(LAST) || "example";
+  if (!/^[\w.\-\/]+$/.test(name) || name.includes("..")) return fatal(`Invalid session name “${name}”.`);
+  const tag = document.createElement("script");
+  tag.src = `sessions/${name}.js`;
+  tag.onload = () => {
+    if (!window.SESSION) return fatal(`sessions/${name}.js loaded but didn't set window.SESSION.`);
+    localStorage.setItem(LAST, name);
+    try { boot(window.SESSION, name); } catch (e) { fatal(e.message); console.error(e); }
+  };
+  tag.onerror = () => {
+    if (!asked) localStorage.removeItem(LAST);
+    fatal(`Couldn't load sessions/${name}.js. Pick one with ?session=name, for example ?session=example.`);
+  };
+  document.head.appendChild(tag);
+})();
+
+function fatal(msg) {
+  const el = document.getElementById("fatal");
+  el.hidden = false;
+  el.textContent = msg;
+}
+
+function parseTime(t) {
+  const m = /^(\d+):([0-5]\d)$/.exec(String(t).trim());
+  if (!m) throw new Error(`“${t}” isn't a valid time. Use m:ss, for example 1:30 or 45:00.`);
+  return +m[1] * 60 + +m[2];
+}
+
+function validate(S) {
+  const errs = [];
+  if (!Array.isArray(S.sections) || !S.sections.length) errs.push("sections must be a non-empty array.");
+  if (S.total == null) errs.push("total is required, for example total: \"45:00\".");
+  const ids = new Set();
+  (S.sections || []).forEach((s, i) => {
+    const where = `sections[${i}]${s.step ? ` (“${s.step}”)` : ""}`;
+    if (!s.step) errs.push(`${where}: step (the title) is required.`);
+    if (s.id && ids.has(s.id)) errs.push(`${where}: duplicate id “${s.id}”.`);
+    if (s.id) ids.add(s.id);
+    try { parseTime(s.length); } catch (e) { errs.push(`${where}: length: ${e.message}`); }
+    if (s.hardEnd != null) try { parseTime(s.hardEnd); } catch (e) { errs.push(`${where}: hardEnd: ${e.message}`); }
+  });
+  (S.checkpoints || []).forEach((c, i) => {
+    if (!ids.has(c.section)) errs.push(`checkpoints[${i}]: no section with id “${c.section}”.`);
+    try { parseTime(c.at); } catch (e) { errs.push(`checkpoints[${i}]: at: ${e.message}`); }
+  });
+  if (errs.length) throw new Error("Problems in the session file:\n• " + errs.join("\n• "));
+}
+
+function boot(S, sessionName) {
+  validate(S);
+  const parse = parseTime;
+  const cfg = {
+    onTimeSeconds: 20,
+    badSeconds: 90,
+    labels: ["Action", "Talk track", "Expected result", "Questions", "Note"],
+    ...(S.settings || {}),
+  };
+  const booth = { title: "Media cue", call: "Play “{name}”", noMedia: "No media for this section", ...(S.booth || {}) };
+  document.title = `${S.title || "Session pacer"} · session-pacer`;
+
+  let acc = 0;
+  const secs = S.sections.map((s) => {
+    const o = { ...s, startSec: acc, lenSec: parse(s.length), hardEndSec: s.hardEnd ? parse(s.hardEnd) : null };
+    acc += o.lenSec;
+    return o;
+  });
+  const TOTAL = parse(S.total);
+  const bufferIdx = secs.findIndex((s) => s.isBuffer);
+  const plannedFinish = bufferIdx >= 0 ? secs[bufferIdx].startSec : acc;
+  const idxOf = (id) => secs.findIndex((s) => s.id === id);
+  const cps = (S.checkpoints || []).map((c) => ({ ...c, atSec: parse(c.at), idx: idxOf(c.section) }));
+  const labelRe = new RegExp(`^(${cfg.labels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")}):(\\s|$)(.*)$`);
+
+  // ---- state ----
+  const KEY = "session-pacer:" + (S.id || sessionName);
+  const fresh = () => ({ running: false, resumedAt: null, accMs: 0, index: 0, entered: [0], scale: 1, autoScroll: true });
+  let state;
+  try { state = { ...fresh(), ...JSON.parse(localStorage.getItem(KEY) || "{}") }; } catch { state = fresh(); }
+  const save = () => localStorage.setItem(KEY, JSON.stringify(state));
+
+  const elapsed = () => (state.accMs + (state.running ? Date.now() - state.resumedAt : 0)) / 1000;
+  const started = () => state.running || state.accMs > 0;
+
+  // ---- formatting ----
+  const fmt = (sec, { sign = false } = {}) => {
+    const neg = sec < 0;
+    const a = Math.floor(Math.abs(sec));
+    const str = `${Math.floor(a / 60)}:${String(a % 60).padStart(2, "0")}`;
+    return (neg ? "−" : sign ? "+" : "") + str;
+  };
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const inline = (s) => esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(https?:\/\/[^\s)]+)/g, '<a href="$1" target="_blank">$1</a>');
+
+  function renderNotes(text) {
+    return text.split("\n").map((raw) => {
+      const line = raw.trim();
+      if (!line) return "";
+      if (line.startsWith("## ")) return `<h4>${inline(line.slice(3))}</h4>`;
+      if (line.startsWith("> ")) return `<p class="prompt">${inline(line.slice(2))}</p>`;
+      if (line.startsWith("- ")) return `<p class="bullet">${inline(line.slice(2))}</p>`;
+      if (/^[(\[].*[)\]]$/.test(line)) return `<p class="stage">${inline(line)}</p>`;
+      const m = line.match(labelRe);
+      if (m) return `<p><span class="label">${esc(m[1])}:</span> ${inline(m[3])}</p>`;
+      return `<p>${inline(line)}</p>`;
+    }).join("");
+  }
+
+  // ---- schedule maths ----
+  // How far the current section is behind (+) or ahead (−) of the plan.
+  function drift(el) {
+    const s = secs[state.index];
+    const start = state.entered[state.index] ?? 0;
+    const inSec = el - start;
+    return (start - s.startSec) + Math.max(0, inSec - s.lenSec);
+  }
+
+  // Projected start for every section from the current one onward, assuming
+  // the rest runs to plan. A section with hardEnd stretches or shrinks to end there.
+  function project(el) {
+    const i = state.index;
+    const starts = [];
+    starts[i] = state.entered[i] ?? 0;
+    const cur = secs[i];
+    let t = cur.hardEndSec != null
+      ? Math.max(el, cur.hardEndSec)
+      : starts[i] + Math.max(el - starts[i], cur.lenSec);
+    for (let j = i + 1; j < secs.length; j++) {
+      starts[j] = t;
+      t = secs[j].hardEndSec != null ? Math.max(t, secs[j].hardEndSec) : t + secs[j].lenSec;
+    }
+    return starts;
+  }
+
+  function cpStatus(c, el, starts) {
+    const reached = state.index >= c.idx && state.entered[c.idx] != null;
+    if (reached) return state.entered[c.idx] <= c.atSec + 0.5 ? "met" : "late";
+    if (!started()) return "upcoming";
+    if (el >= c.atSec) return "missed";
+    if (starts[c.idx] > c.atSec + 0.5) return "risk";
+    if (c.atSec - el <= 60) return "soon";
+    return "upcoming";
+  }
+
+  // ---- static render (on section change) ----
+  const $ = (id) => document.getElementById(id);
+  const lastHTML = {};
+  const setHTML = (id, html) => { if (lastHTML[id] !== html) { lastHTML[id] = html; $(id).innerHTML = html; } };
+  $("title").textContent = S.title || "";
+  $("event").textContent = S.event || "";
+  $("protect").textContent = S.neverCut ? "🛡 " + S.neverCut : "";
+  const hasMedia = secs.some((s) => s.media);
+  $("booth").hidden = !hasMedia;
+  $("cps-card").hidden = !cps.length;
+  $("hint-filler").hidden = !S.filler;
+
+  function renderStatic() {
+    document.documentElement.style.setProperty("--scale", state.scale);
+    const i = state.index, s = secs[i];
+    $("cur-index").textContent = `Section ${i + 1} of ${secs.length} · planned ${fmt(s.startSec)} → ${fmt(s.hardEndSec ?? s.startSec + s.lenSec)}`;
+    $("cur-step").textContent = s.step;
+    $("cur-what").textContent = s.what || "";
+    const b = [];
+    if (s.who) b.push(`<span class="badge who">🎤 ${esc(s.who)}</span>`);
+    if (s.media) {
+      const m = s.media;
+      const lbl = { ready: "Video ready", todo: "Video TODO", incoming: "Video incoming", live: "Live", "video-only": "Video only" }[m.status] || m.status;
+      b.push(`<span class="badge media-${m.status}">🎬 ${lbl}${m.duration ? " · " + esc(m.duration) : ""}${m.file ? " · " + esc(m.file) : ""}</span>`);
+    }
+    if (s.slide) b.push(`<span class="badge">🖥 ${esc(s.slide)}</span>`);
+    if (s.neverCut) b.push(`<span class="badge protect">🛡 Never cut</span>`);
+    $("cur-badges").innerHTML = b.join("");
+    $("notes").innerHTML = renderNotes(s.notes || "");
+    $("notes").scrollTop = 0;
+    scrollHeld = false;
+
+    renderBooth(i);
+
+    const n = secs[i + 1];
+    $("next").innerHTML = n
+      ? `<div class="title">${esc(n.step)}</div>
+         <div class="meta">${esc(n.who || "")} · ${fmt(n.lenSec)} planned · starts ${fmt(n.startSec)}</div>
+         <div class="first">${inline((n.notes || "").split("\n")[0].replace(/^> /, ""))}</div>`
+      : `<div class="muted">That's the end.</div>`;
+
+    $("timeline").innerHTML =
+      secs.map((x, j) => `<div class="seg ${x.isBuffer ? "buffer" : ""}" data-j="${j}" style="width:${(x.lenSec / TOTAL) * 100}%" title="${esc(x.step)} (${fmt(x.startSec)})">${esc(x.step)}</div>`).join("") +
+      cps.map((c, k) => `<div class="cp" data-k="${k}" style="left:${(c.atSec / TOTAL) * 100}%" title="${esc(c.at + " " + c.label)}"></div>`).join("") +
+      `<div class="playhead" id="playhead"></div>`;
+    $("timeline").querySelectorAll(".seg").forEach((el) => el.onclick = () => jump(+el.dataset.j));
+
+    $("btn-start").textContent = state.running ? "Pause" : started() ? "Resume" : "Start";
+    $("btn-start").classList.toggle("primary", !state.running);
+  }
+
+  const stepNo = (s) => { const n = (s.step.match(/^([\d +]+)\./) || [])[1]?.trim(); return n ? `Step ${n}` : s.step; };
+  const callName = (f) => f.replace(/\.[a-z0-9]{2,4}$/i, "");
+  const callLine = (f) => booth.call.replace("{name}", callName(f)).replace("{file}", f);
+
+  function renderBooth(i) {
+    if (!hasMedia) return;
+    const s = secs[i], m = s.media;
+    let html = `<h3>${esc(booth.title)}</h3>`;
+    if (m && m.file) {
+      html += `<div class="file">🎬 ${esc(m.file)}</div>
+        <div class="meta">${esc(stepNo(s))}${m.duration ? " · " + esc(m.duration) : ""}${m.status && m.status !== "ready" ? " · " + esc(m.status) : ""}</div>
+        ${booth.call ? `<div class="say">${esc(callLine(m.file))}</div>` : ""}`;
+    } else {
+      html += `<div class="file none">${esc(booth.noMedia)}${s.slide ? `: ${esc(s.slide)}` : ""}</div>`;
+    }
+    if (m && m.alt) html += `<div class="alt">↳ ${esc(m.alt)}</div>`;
+
+    const j = secs.findIndex((x, k) => k > i && x.media && x.media.file && x.media.file !== m?.file);
+    if (j >= 0) {
+      const nx = secs[j];
+      html += `<div class="upnext">Next: <b>${esc(nx.media.file)}</b><div class="meta">${esc(stepNo(nx))} · planned ${fmt(nx.startSec)}${j === i + 1 ? " · up next" : ""}</div></div>`;
+    }
+
+    const rows = secs.filter((x) => x.media && (x.media.file || x.media.alt));
+    html += `<details${boothOpen ? " open" : ""}><summary>All media</summary><table>${rows.map((x) =>
+      `<tr class="${x === s ? "cur" : ""}"><td>${esc(stepNo(x).replace(/^Step /, ""))}</td><td>${esc(x.media.file || x.media.alt)}${x.media.file && x.media.alt ? `<div class="meta">${esc(x.media.alt)}</div>` : ""}</td></tr>`
+    ).join("")}</table></details>`;
+
+    $("booth").innerHTML = html;
+    $("booth").querySelector("details").ontoggle = (e) => { boothOpen = e.target.open; };
+  }
+  let boothOpen = false;
+
+  // ---- live render ----
+  function tick() {
+    const el = elapsed();
+    const i = state.index, s = secs[i];
+    const now = new Date();
+    $("clock").textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+    // session
+    $("elapsed").textContent = fmt(el);
+    $("elapsed-sub").textContent = state.running ? "running" : started() ? "⏸ paused" : "not started";
+    const rem = TOTAL - el;
+    $("remaining").textContent = rem < 0 ? fmt(-rem, { sign: true }) : fmt(rem);
+    $("remaining-sub").textContent = rem < 0 ? "OVER the hard stop" : `hard stop at ${fmt(TOTAL)}`;
+    $("stat-remaining").className = "stat " + (rem < 0 ? "bad" : rem < 180 ? "warn" : "");
+    $("stat-elapsed").className = "stat" + (started() && !state.running ? " warn" : "");
+
+    // pace
+    const d = drift(el);
+    const starts = project(el);
+    const finish = i >= bufferIdx && bufferIdx >= 0 ? (state.entered[bufferIdx] ?? el) : starts[bufferIdx] ?? el;
+    const st = $("stat-status");
+    if (!started()) {
+      st.className = "stat status idle"; $("status").textContent = "Not started";
+      $("status-sub").textContent = "Press Space to start the clock";
+    } else if (Math.abs(d) <= cfg.onTimeSeconds) {
+      st.className = "stat status ok"; $("status").textContent = "On time";
+      $("status-sub").textContent = d > 0 ? `${fmt(d)} behind, within tolerance` : d < 0 ? `${fmt(-d)} ahead` : "exactly on plan";
+    } else if (d > 0) {
+      st.className = "stat status " + (d > cfg.badSeconds ? "bad" : "warn");
+      $("status").innerHTML = `Behind <span class="mono">${fmt(d)}</span>`;
+      $("status-sub").textContent = finish <= plannedFinish + 0.5
+        ? "a flexible section can still absorb it"
+        : "cut something: see suggestions below";
+    } else {
+      st.className = "stat status ahead";
+      $("status").innerHTML = `Ahead <span class="mono">${fmt(-d)}</span>`;
+      $("status-sub").textContent = "room to breathe";
+    }
+
+    $("finish").textContent = fmt(finish);
+    const slack = TOTAL - finish;
+    $("finish-sub").textContent = slack >= 0 ? `${fmt(slack)} buffer before ${fmt(TOTAL)}` : `${fmt(-slack)} past the hard stop`;
+    $("stat-finish").className = "stat " + (slack < 0 ? "bad" : finish > plannedFinish + 0.5 ? "warn" : "ok");
+
+    // section
+    const start = state.entered[i] ?? 0;
+    const inSec = Math.max(0, el - start);
+    const budget = s.hardEndSec != null ? s.hardEndSec - start : s.lenSec;
+    const secRem = budget - inSec;
+    const over = secRem < 0, low = !over && secRem <= Math.min(30, budget * 0.25);
+    $("sec-remaining").textContent = over ? fmt(-secRem, { sign: true }) : fmt(secRem);
+    $("sec-elapsed").textContent = `${fmt(inSec)} in · ${fmt(Math.max(budget, 0))} ${s.hardEndSec != null ? "until " + s.hardEnd : "planned"}`;
+    $("sectimer").className = "sectimer" + (over ? " over" : low ? " low" : "");
+    $("progress").className = "progress" + (over ? " over" : low ? " low" : "");
+    $("progress-bar").style.width = Math.min(100, budget > 0 ? (inSec / budget) * 100 : 100) + "%";
+
+    // checkpoints
+    const statuses = cps.map((c) => cpStatus(c, el, starts));
+    const icons = { met: "✓", late: "✓", missed: "✗", risk: "!", soon: "◷", upcoming: "·" };
+    setHTML("cps", cps.map((c, k) => {
+      const stt = statuses[k];
+      let note = "";
+      if (stt === "met" || stt === "late") note = `at ${fmt(state.entered[c.idx])}`;
+      else if (stt === "missed") note = `${fmt(el - c.atSec)} late`;
+      else if (started()) note = `in ${fmt(c.atSec - el)}`;
+      if (stt === "risk") note += ` · proj. ${fmt(starts[c.idx])}`;
+      return `<li class="${stt}"><span class="icon">${icons[stt]}</span><span class="mono">${c.at}</span><span>${esc(c.label)}</span><span class="note mono">${note}</span></li>`;
+    }).join(""));
+    $("timeline").querySelectorAll(".cp").forEach((el, k) => {
+      el.className = "cp " + (statuses[k] === "met" ? "met" : statuses[k] === "missed" ? "missed" : "");
+    });
+
+    // alerts: missed checkpoints first, then the next one at risk
+    const alerts = [];
+    cps.forEach((c, k) => {
+      if (statuses[k] === "missed") {
+        alerts.push(`<div class="alert missed"><span class="tag">Missed ${c.at}</span><span>Not yet: ${esc(c.label)}. ${esc(c.ifBehind || "")}</span></div>`);
+      }
+    });
+    const nextRisk = cps.findIndex((c, k) => statuses[k] === "risk");
+    if (!alerts.length && nextRisk >= 0) {
+      const c = cps[nextRisk];
+      alerts.push(`<div class="alert risk"><span class="tag">At risk · ${c.at}</span><span>On this pace you reach “${esc(secs[c.idx].step)}” at ${fmt(starts[c.idx])}. ${c.ifBehind ? "Plan B: " + esc(c.ifBehind) : ""}</span></div>`);
+    }
+    setHTML("alerts", alerts.join(""));
+
+    // cut hint for the current section when behind
+    const behind = started() && (d > cfg.onTimeSeconds || alerts.length);
+    setHTML("cut", behind && s.cutHint ? `<div class="cut"><b>To save time here:</b> ${inline(s.cutHint)}</div>` : "");
+
+    // timeline + agenda
+    $("playhead").style.left = `calc(${Math.min(100, (el / TOTAL) * 100)}% - 1px)`;
+    $("timeline").querySelectorAll(".seg").forEach((el, j) => {
+      el.classList.toggle("done", j < i);
+      el.classList.toggle("current", j === i);
+    });
+    setHTML("agenda", secs.map((x, j) => {
+      const actual = j <= i ? state.entered[j] : starts[j];
+      const delta = actual != null && started() ? actual - x.startSec : null;
+      const dcls = delta == null ? "" : Math.abs(delta) <= cfg.onTimeSeconds ? "ontime" : delta > 0 ? "late" : "early";
+      const dtxt = delta == null ? "" : (j <= i ? "" : "~") + fmt(delta, { sign: true });
+      return `<li class="${j < i ? "done" : j === i ? "current" : ""}" data-j="${j}">
+        <span class="mono">${fmt(x.startSec)}</span>
+        <span>${esc(x.step)}</span>
+        <span class="mono muted">${fmt(x.lenSec)}</span>
+        <span class="mono delta ${dcls}">${dtxt}</span></li>`;
+    }).join(""));
+  }
+
+  // ---- auto-scroll ----
+  // Reading position moves linearly through the notes over 85% of the
+  // section's budget. The viewport follows once that position is a third of
+  // the way down, so scrolling starts only after the visible part has been read.
+  // Scrolling the notes by hand holds auto-scroll until the next section.
+  let scrollHeld = false;
+  const notesEl = $("notes");
+  ["wheel", "touchmove", "mousedown"].forEach((ev) => notesEl.addEventListener(ev, () => { scrollHeld = true; }, { passive: true }));
+
+  function scrollLoop() {
+    requestAnimationFrame(scrollLoop);
+    const max = notesEl.scrollHeight - notesEl.clientHeight;
+    const ind = $("autoscroll");
+    let label = "", cls = "autoscroll";
+    if (max > 4) {
+      if (!state.autoScroll) label = "Auto-scroll off (S to turn on)";
+      else if (scrollHeld) { label = "Auto-scroll held: you scrolled (S to resume)"; cls += " held"; }
+      else if (!state.running) label = "Auto-scroll waits for the clock";
+      else { label = "Auto-scrolling"; cls += " on"; }
+    }
+    if (ind.textContent !== label) ind.textContent = label;
+    if (ind.className !== cls) ind.className = cls;
+    if (max <= 4 || !state.running || !state.autoScroll || scrollHeld) return;
+
+    const s = secs[state.index];
+    const start = state.entered[state.index] ?? 0;
+    const budget = Math.max(10, s.hardEndSec != null ? s.hardEndSec - start : s.lenSec);
+    const p = (elapsed() - start) / (budget * 0.85);
+    const target = Math.min(max, Math.max(0, p * notesEl.scrollHeight - notesEl.clientHeight / 3));
+    if (target > notesEl.scrollTop + 0.5) notesEl.scrollTop = target;
+  }
+
+  function toggleAutoScroll() {
+    if (scrollHeld) { scrollHeld = false; state.autoScroll = true; }
+    else state.autoScroll = !state.autoScroll;
+    save();
+  }
+
+  $("filler-notes").innerHTML = renderNotes(S.filler || "");
+  function toggleFiller(force) {
+    if (!S.filler) return;
+    const f = $("filler");
+    f.classList.toggle("open", force ?? !f.classList.contains("open"));
+  }
+
+  // ---- actions ----
+  function toggle() {
+    if (state.running) { state.accMs += Date.now() - state.resumedAt; state.running = false; }
+    else { state.resumedAt = Date.now(); state.running = true; }
+    save(); renderStatic(); tick();
+  }
+  function jump(j) {
+    if (j < 0 || j >= secs.length || j === state.index) return;
+    const el = started() ? elapsed() : 0;
+    if (j > state.index) for (let k = state.index + 1; k <= j; k++) state.entered[k] = el;
+    else state.entered.length = j + 1;
+    state.index = j;
+    save(); renderStatic(); tick(); scrollAgenda();
+  }
+  function scrollAgenda() {
+    const li = document.querySelector("#agenda li.current");
+    const box = li?.closest(".agenda");
+    if (!li || !box) return;
+    const top = li.offsetTop - 40, bottom = li.offsetTop + li.offsetHeight - box.clientHeight + 8;
+    if (box.scrollTop > top) box.scrollTop = top;
+    else if (box.scrollTop < bottom) box.scrollTop = bottom;
+  }
+  function nudge(sec) {
+    state.accMs = Math.max(0, state.accMs + sec * 1000);
+    save(); tick();
+  }
+  function reset() {
+    if (!confirm("Reset the session clock and go back to the first section?")) return;
+    const scale = state.scale;
+    state = { ...fresh(), scale };
+    save(); renderStatic(); tick();
+  }
+  function setScale(f) {
+    state.scale = Math.min(2.2, Math.max(0.6, +(state.scale * f).toFixed(2)));
+    save(); renderStatic();
+  }
+
+  $("btn-start").onclick = toggle;
+  $("btn-next").onclick = () => jump(state.index + 1);
+  $("btn-prev").onclick = () => jump(state.index - 1);
+  $("btn-reset").onclick = reset;
+  $("agenda").addEventListener("click", (e) => {
+    const li = e.target.closest("li[data-j]");
+    if (li) jump(+li.dataset.j);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    switch (e.key) {
+      case " ": e.preventDefault(); toggle(); break;
+      case "ArrowRight": case "n": case "N": case "PageDown": e.preventDefault(); jump(state.index + 1); break;
+      case "ArrowLeft": case "p": case "P": case "PageUp": e.preventDefault(); jump(state.index - 1); break;
+      case "[": nudge(-15); break;
+      case "]": nudge(15); break;
+      case "-": setScale(1 / 1.1); break;
+      case "=": case "+": setScale(1.1); break;
+      case "r": case "R": reset(); break;
+      case "s": case "S": toggleAutoScroll(); break;
+      case "q": case "Q": toggleFiller(); break;
+      case "Escape": toggleFiller(false); break;
+      case "f": case "F":
+        document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+        break;
+    }
+  });
+
+  renderStatic();
+  tick();
+  scrollAgenda();
+  setInterval(tick, 250);
+  requestAnimationFrame(scrollLoop);
+}
+</script>
+</body>
+</html>

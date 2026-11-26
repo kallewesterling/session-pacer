@@ -1,0 +1,26 @@
+#!/bin/sh
+# Usage: ./start [session]   e.g. ./start example, ./start private/my-talk
+#
+# Serves the folder on localhost and opens the browser. Falls back to opening
+# index.html directly when python3 isn't available.
+cd "$(dirname "$0")" || exit 1
+
+SESSION="${1:-}"
+PORT="${PORT:-8642}"
+
+open_url() {
+  if command -v open >/dev/null 2>&1; then open "$1"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1"
+  else echo "Open $1 in your browser."
+  fi
+}
+
+if command -v python3 >/dev/null 2>&1; then
+  URL="http://localhost:$PORT/"
+  [ -n "$SESSION" ] && URL="${URL}?session=$SESSION"
+  echo "session-pacer on $URL (Ctrl-C to stop)"
+  (sleep 0.6 && open_url "$URL") &
+  exec python3 -m http.server "$PORT" --bind 127.0.0.1
+else
+  open_url "index.html"
+fi
