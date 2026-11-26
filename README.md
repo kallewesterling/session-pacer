@@ -10,7 +10,7 @@ cut when you miss a checkpoint.
 There's no build step, no dependencies, and nothing leaves your machine. It's
 one HTML file plus a session file that describes your talk.
 
-**[Try the live demo](https://kallewesterling.github.io/session-pacer/?session=example)**
+**[Try the live demo](https://westerling.nu/session-pacer/?session=example)**
 (press `Space` to start the clock).
 
 ## Quick start
